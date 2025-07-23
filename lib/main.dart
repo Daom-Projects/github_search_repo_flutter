@@ -52,7 +52,12 @@ class _MyAppState extends State<MyApp> {
 
 // --- Servicio de Encriptación Profesional ---
 class EncryptionService {
-  Uint8List _deriveKey(String password, Uint8List salt) {
+  // --- MEJORA: La derivación de clave ahora es asíncrona para no bloquear la UI ---
+  Future<Uint8List> _deriveKey(String password, Uint8List salt) async {
+    // Cedemos el control al event loop para que la UI pueda actualizarse (mostrar un loader).
+    await Future.delayed(Duration.zero);
+
+    // La operación intensiva de CPU se ejecuta después de ceder el control.
     final pbkdf2 = pc.PBKDF2KeyDerivator(pc.HMac(pc.SHA256Digest(), 64))
       ..init(pc.Pbkdf2Parameters(salt, 100000, 32));
     return pbkdf2.process(Uint8List.fromList(utf8.encode(password)));
@@ -66,24 +71,34 @@ class EncryptionService {
     return secureRandom.nextBytes(16);
   }
 
-  // --- CORRECCIÓN: Se cambia el nombre del método para evitar conflicto ---
-  String encryptText(String plainText, String password, Uint8List salt) {
-    final key = encrypt.Key(_deriveKey(password, salt));
+  // --- MEJORA: El método ahora es un Future porque depende de _deriveKey ---
+  Future<String> encryptText(
+    String plainText,
+    String password,
+    Uint8List salt,
+  ) async {
+    final derivedKey = await _deriveKey(password, salt);
+    final key = encrypt.Key(derivedKey);
     final iv = encrypt.IV.fromSecureRandom(16);
     final encrypter = encrypt.Encrypter(encrypt.AES(key));
     final encrypted = encrypter.encrypt(plainText, iv: iv);
     return "${iv.base64}:${encrypted.base64}";
   }
 
-  // --- CORRECCIÓN: Se cambia el nombre del método para evitar conflicto ---
-  String? decryptText(String combined, String password, Uint8List salt) {
+  // --- MEJORA: El método ahora es un Future porque depende de _deriveKey ---
+  Future<String?> decryptText(
+    String combined,
+    String password,
+    Uint8List salt,
+  ) async {
     try {
       final parts = combined.split(':');
       if (parts.length != 2) return null;
 
       final iv = encrypt.IV.fromBase64(parts[0]);
       final encrypted = encrypt.Encrypted.fromBase64(parts[1]);
-      final key = encrypt.Key(_deriveKey(password, salt));
+      final derivedKey = await _deriveKey(password, salt);
+      final key = encrypt.Key(derivedKey);
       final encrypter = encrypt.Encrypter(encrypt.AES(key));
       return encrypter.decrypt(encrypted, iv: iv);
     } catch (e) {
@@ -204,8 +219,8 @@ class _RepoFinderPageState extends State<RepoFinderPage> {
     try {
       await _githubService.getUserRepos(_tokenController.text);
       final salt = _encryptionService.generateSalt();
-      // --- CORRECCIÓN: Se llama al método renombrado ---
-      final encryptedToken = _encryptionService.encryptText(
+      // --- MEJORA: Se espera (await) la finalización de la encriptación ---
+      final encryptedToken = await _encryptionService.encryptText(
         _tokenController.text,
         password,
         salt,
@@ -247,8 +262,8 @@ class _RepoFinderPageState extends State<RepoFinderPage> {
     }
 
     final salt = base64.decode(saltBase64);
-    // --- CORRECCIÓN: Se llama al método renombrado ---
-    final token = _encryptionService.decryptText(
+    // --- MEJORA: Se espera (await) la finalización de la desencriptación ---
+    final token = await _encryptionService.decryptText(
       encryptedToken,
       _passwordController.text,
       salt,
